@@ -104,14 +104,59 @@ void SetValueMapper::Opset12() {
   if (decrease_axes_.size() > 0 && value_rank != input_info[0].Rank()) {
     value = helper_->Unsqueeze(value, decrease_axes_);
   }
-  auto expand_value =
+  std::string expand_value =
       helper_->MakeNode("Expand", {value, sliced_shape})->output(0);
 
+
+  // Code starts | Author: liuyulong06@baidu.com
+  if (axes_.size() == 2 && axes_[0] == 0){ 
+    std::string row_indices = helper_->MakeNode("Range", 
+      {
+        helper_->Constant({},ONNX_NAMESPACE::TensorProto::INT64, starts_[0]),
+        helper_->Constant({},ONNX_NAMESPACE::TensorProto::INT64, ends_[0]),
+        helper_->Constant({},ONNX_NAMESPACE::TensorProto::INT64, steps_[0])
+      }
+    )->output(0);
+    std::string sliced_left_part = helper_->MakeNode("Slice", 
+      {
+        input_tensor, 
+        helper_->Constant({},ONNX_NAMESPACE::TensorProto::INT64, {starts_[0], 0}), 
+        helper_->Constant({},ONNX_NAMESPACE::TensorProto::INT64, {ends_[0], starts_[1]}),
+        axes, 
+        helper_->Constant({},ONNX_NAMESPACE::TensorProto::INT64, steps_)
+      }
+    )->output(0);
+    auto gather_col_end = helper_->MakeNode("Gather", {
+      input_shape, 
+      helper_->Constant({1}, ONNX_NAMESPACE::TensorProto::INT64, axes_[1])}
+    );
+
+    std::string sliced_right_part = helper_->MakeNode("Slice", 
+      {
+        input_tensor, 
+        helper_->Constant(ONNX_NAMESPACE::TensorProto::INT64, {starts_[0], ends_[1]}), 
+        helper_->Concat(
+          {
+            helper_->Constant({1}, ONNX_NAMESPACE::TensorProto::INT64, {ends_[0]}),
+            gather_col_end->output(0)
+          },
+          0
+        axes, 
+        helper_->Constant(ONNX_NAMESPACE::TensorProto::INT64, steps_)
+      }
+    )->output(0);
+    auto updates_node = helper_->MakeNode("Concat", {sliced_left_part, expand_value, sliced_right_part});
+    AddAttribute(updates_node, "axis", axis);
+
+    return ;
+  }   
+  // Code ends
+
   auto indices = helper_
-                     ->MakeNode("Range", {helper_->Squeeze(starts, {}),
-                                          helper_->Squeeze(ends, {}),
-                                          helper_->Squeeze(steps, {})})
-                     ->output(0);
+                    ->MakeNode("Range", {helper_->Squeeze(starts, {}),
+                                        helper_->Squeeze(ends, {}),
+                                        helper_->Squeeze(steps, {})})
+                    ->output(0);
   if (axes_[0] == 0) {
     indices = helper_->Unsqueeze(indices, {1});
     helper_->MakeNode("ScatterND", {input_tensor, indices, expand_value},
